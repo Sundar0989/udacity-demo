@@ -1,7 +1,11 @@
 ---
 AWSTemplateFormatVersion: 2010-09-09
+
 Description: EKSWSV1
+
+
 Parameters:
+
   EksClusterName:
     Type: String
     Description: The name of the EKS cluster created
@@ -9,6 +13,7 @@ Parameters:
     MinLength: 1
     MaxLength: 100
     ConstraintDescription: You must enter the EKS cluster name
+
   GitSourceRepo:
     Type: String
     Description: GitHub source repository - must contain a Dockerfile and buildspec.yml in the base
@@ -16,6 +21,7 @@ Parameters:
     MinLength: 1
     MaxLength: 100
     ConstraintDescription: You must enter a GitHub repository name
+
   GitBranch:
     Type: String
     Default: master
@@ -23,6 +29,7 @@ Parameters:
     MinLength: 1
     MaxLength: 100
     ConstraintDescription: You must enter a GitHub repository branch name
+
   GitHubToken:
     Type: String
     NoEcho: true
@@ -30,13 +37,15 @@ Parameters:
     MinLength: 3
     MaxLength: 100
     ConstraintDescription: You must enter a GitHub personal access token
+
   GitHubUser:
     Type: String
-    Default: Sundar0989
+    Default: sundar0989
     Description: GitHub username or organization
     MinLength: 3
     MaxLength: 100
     ConstraintDescription: You must enter a GitHub username or organization
+
   CodeBuildDockerImage:
     Type: String
     Default: aws/codebuild/docker:17.09.0
@@ -44,6 +53,7 @@ Parameters:
     MinLength: 3
     MaxLength: 100
     ConstraintDescription: You must enter a CodeBuild Docker image
+
   KubectlRoleName:
     Type: String
     Default: UdacityFlaskDeployCBKubectlRole
@@ -51,6 +61,8 @@ Parameters:
     MinLength: 3
     MaxLength: 100
     ConstraintDescription: You must enter a kubectl IAM role
+
+
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -88,13 +100,18 @@ Metadata:
         default: kubectl IAM role
       EksClusterName:
         default: EKS cluster name
+
+
 Resources:
+
   EcrDockerRepository:
     Type: AWS::ECR::Repository
     DeletionPolicy: Retain
+
   CodePipelineArtifactBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
+
   CustomResourceLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -140,6 +157,7 @@ Resources:
       Role: !GetAtt CustomResourceLambdaExecutionRole.Arn
       Runtime: python2.7
       Timeout: 300
+
   CustomResourceLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -165,6 +183,7 @@ Resources:
                 Action:
                   - iam:GetRole
                   - iam:UpdateAssumeRolePolicy
+
   KubectlAssumeRoleCustomResource:
     Type: Custom::CustomResource
     Properties:
@@ -174,6 +193,7 @@ Resources:
     DependsOn:
       - CustomResourceLambda
       - CodeBuildServiceRole
+
   CodePipelineServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -209,6 +229,7 @@ Resources:
                   - s3:GetObjectVersion
                   - s3:GetBucketVersioning
     DependsOn: CodePipelineArtifactBucket
+
   CodeBuildServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -220,3 +241,124 @@ Resources:
             Principal:
               Service: codebuild.amazonaws.com
             Action: sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/${KubectlRoleName}
+                Effect: Allow
+                Action:
+                  - sts:AssumeRole
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - eks:Describe*
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - ssm:GetParameters
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeDhcpOptions
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs
+                  - ec2:CreateNetworkInterfacePermission
+              - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+              - Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrDockerRepository}
+                Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Type: LINUX_CONTAINER
+        Image: !Ref CodeBuildDockerImage
+        EnvironmentVariables:
+          - Name: REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrDockerRepository}
+          - Name: REPOSITORY_NAME
+            Value: !Ref GitSourceRepo
+          - Name: REPOSITORY_BRANCH
+            Value: !Ref GitBranch
+          - Name: EKS_CLUSTER_NAME
+            Value: !Ref EksClusterName
+          - Name: EKS_KUBECTL_ROLE_ARN
+            Value: !Sub arn:aws:iam::${AWS::AccountId}:role/${KubectlRoleName}
+      Name: !Ref AWS::StackName
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+    DependsOn: KubectlAssumeRoleCustomResource
+
+  CodePipelineGitHub:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: App
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              Configuration:
+                Owner: !Ref GitHubUser
+                Repo: !Ref GitSourceRepo
+                Branch: !Ref GitBranch
+                OAuthToken: !Ref GitHubToken
+              OutputArtifacts:
+                - Name: App
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: App
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+    DependsOn: CodeBuildProject
