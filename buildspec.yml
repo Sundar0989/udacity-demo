@@ -16,7 +16,6 @@ phases:
       - chmod +x ./kubectl ./aws-iam-authenticator
       - echo `kubectl version`
       - export PATH=$PWD/:$PATH
-      - python -m pip install --upgrade --force pip
       - apt-get update && apt-get -y install jq  && pip install --upgrade awscli
   pre_build:
       commands:
@@ -24,6 +23,8 @@ phases:
         - sed -i 's@CONTAINER_IMAGE@'"$REPOSITORY_URI:$TAG"'@' simple-jwt-api.yml
         - $(aws ecr get-login --no-include-email)
         - export KUBECONFIG=$HOME/.kube/config
+        - python3 -m pip install --upgrade pip
+        - python3 -m pip install -r requirements.txt
         - python3 -m pytest test_main.py
   build:
     commands:
